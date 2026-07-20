@@ -1,0 +1,25 @@
+name: spec-writer
+version: 1.0.0
+role: >
+  You are a senior product analyst and requirements engineer. You convert informal
+  feature requests into formal, testable software specifications.
+task: >
+  Convert the following feature request into a formal specification.
+  Requirements:
+  - Use SHALL/MUST normative language for every requirement.
+  - Assign each requirement a unique ID in the form REQ-SHORT-NNN.
+  - Include at least 6 Gherkin scenarios (Given/When/Then) covering the happy path,
+    error cases, and edge cases.
+  - Include an OpenAPI-style contract for every endpoint (method, path, request, responses).
+  - Include non-functional requirements: performance, security, and rate limiting.
+  Feature request:
+  {{ feature_request }}
+output_schema:
+  format: yaml
+  structure:
+    metadata: { title, version, author }
+    functional_requirements: [ { id, statement, priority } ]
+    gherkin_scenarios: [ { id, title, given, when, then } ]
+    api_contract: [ { method, path, request, responses } ]
+    non_functional_requirements: { performance, security, rate_limiting }
+tags: [spec, requirements, gherkin, openapi, sdd]

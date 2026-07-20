@@ -1,0 +1,215 @@
+metadata:
+  title: URL Shortener Service Specification
+  version: 1.0.0
+  author: spec-writer
+
+functional_requirements:
+  - id: REQ-SHORT-001
+    statement: >
+      The system SHALL accept a POST request containing a long URL and MUST return a
+      unique short code together with the full short URL.
+    priority: must
+
+  - id: REQ-SHORT-002
+    statement: >
+      The system SHALL generate a short code that is unique across all stored URLs and
+      MUST consist of URL-safe alphanumeric characters (e.g. abc123).
+    priority: must
+
+  - id: REQ-SHORT-003
+    statement: >
+      The system SHALL redirect a GET request on a valid short code to its original URL
+      using an HTTP 301 or 302 response.
+    priority: must
+
+  - id: REQ-SHORT-004
+    statement: >
+      The system MUST return HTTP 404 when a requested short code does not exist.
+    priority: must
+
+  - id: REQ-SHORT-005
+    statement: >
+      The system SHALL track analytics for each short URL, and MUST record click count,
+      last accessed timestamp, and the HTTP referrer on every successful redirect.
+    priority: must
+
+  - id: REQ-SHORT-006
+    statement: >
+      The system SHALL expose an endpoint that returns the analytics (click count,
+      last accessed timestamp, referrer history) for a given short code.
+    priority: must
+
+  - id: REQ-SHORT-007
+    statement: >
+      The system SHALL support an optional expiration date on a short URL, and MUST
+      return HTTP 410 (Gone) when a redirect is requested for an expired short URL.
+    priority: must
+
+  - id: REQ-SHORT-008
+    statement: >
+      The system MUST validate the submitted URL and SHALL reject any URL that is
+      syntactically invalid or does not use the http or https scheme with HTTP 400.
+    priority: must
+
+  - id: REQ-SHORT-009
+    statement: >
+      The system SHALL detect duplicate submissions of an identical original URL and
+      MUST return the existing short code rather than creating a new one.
+    priority: should
+
+  - id: REQ-SHORT-010
+    statement: >
+      The system MUST reject malicious or unsafe URLs, and SHALL block private, loopback,
+      link-local, and internal network targets to prevent SSRF, returning HTTP 400.
+    priority: must
+
+  - id: REQ-SHORT-011
+    statement: >
+      The system SHALL return structured JSON error responses containing a timestamp,
+      status code, error code, and human-readable message for every error condition.
+    priority: must
+
+  - id: REQ-SHORT-012
+    statement: >
+      The system MUST NOT perform an open redirect; it SHALL only redirect to URLs that
+      were previously validated and stored by the service.
+    priority: must
+
+gherkin_scenarios:
+  - id: SCN-001
+    title: Shorten a valid URL (happy path)
+    given: a client has a valid long URL "https://www.example.com/some/very/long/path"
+    when: the client sends POST /api/v1/urls with that URL in the request body
+    then: >
+      the service responds 201 Created with a unique short code and a full short URL,
+      and the mapping is persisted (REQ-SHORT-001, REQ-SHORT-002).
+
+  - id: SCN-002
+    title: Redirect to the original URL (happy path)
+    given: a short code "abc123" exists and maps to "https://www.example.com"
+    when: the client sends GET /abc123
+    then: >
+      the service responds 302 Found with a Location header pointing to
+      "https://www.example.com" and increments analytics (REQ-SHORT-003, REQ-SHORT-005).
+
+  - id: SCN-003
+    title: Reject an invalid URL (error case)
+    given: a client has an invalid URL "not-a-valid-url"
+    when: the client sends POST /api/v1/urls with that URL
+    then: >
+      the service responds 400 Bad Request with a structured error body and does not
+      create a short code (REQ-SHORT-008, REQ-SHORT-011).
+
+  - id: SCN-004
+    title: Unknown short code returns not found (error case)
+    given: no short code "zzz999" exists in the system
+    when: the client sends GET /zzz999
+    then: >
+      the service responds 404 Not Found with a structured error body
+      (REQ-SHORT-004, REQ-SHORT-011).
+
+  - id: SCN-005
+    title: Expired URL is gone (edge case)
+    given: a short code "old123" exists but its expiration date is in the past
+    when: the client sends GET /old123
+    then: >
+      the service responds 410 Gone and does not redirect (REQ-SHORT-007).
+
+  - id: SCN-006
+    title: Duplicate URL returns existing short code (edge case)
+    given: the URL "https://www.example.com" has already been shortened to "abc123"
+    when: the client sends POST /api/v1/urls with the same URL
+    then: >
+      the service responds 200 OK and returns the existing short code "abc123" without
+      creating a duplicate record (REQ-SHORT-009).
+
+  - id: SCN-007
+    title: Reject a malicious/SSRF URL (edge case)
+    given: a client submits "http://169.254.169.254/latest/meta-data" targeting internal infrastructure
+    when: the client sends POST /api/v1/urls with that URL
+    then: >
+      the service responds 400 Bad Request and refuses to store the URL
+      (REQ-SHORT-010, REQ-SHORT-012).
+
+  - id: SCN-008
+    title: Retrieve analytics for a short code (happy path)
+    given: a short code "abc123" exists and has been accessed 5 times
+    when: the client sends GET /api/v1/urls/abc123/analytics
+    then: >
+      the service responds 200 OK with click count 5, the last accessed timestamp,
+      and referrer data (REQ-SHORT-006).
+
+api_contract:
+  - method: POST
+    path: /api/v1/urls
+    request:
+      content_type: application/json
+      body:
+        url: string (required, valid http/https URL)
+        expires_at: string (optional, ISO-8601 timestamp)
+    responses:
+      "201":
+        description: Short URL created
+        body: { short_code: string, short_url: string, original_url: string, expires_at: string|null, created_at: string }
+      "200":
+        description: URL already shortened, existing short code returned
+        body: { short_code: string, short_url: string, original_url: string }
+      "400":
+        description: Invalid, malicious, or malformed URL
+        body: { timestamp: string, status: 400, error: string, message: string }
+
+  - method: GET
+    path: /{shortCode}
+    request:
+      path_params: { shortCode: string }
+      headers: { Referer: string (optional) }
+    responses:
+      "302":
+        description: Redirect to original URL
+        headers: { Location: string }
+      "404":
+        description: Short code not found
+        body: { timestamp: string, status: 404, error: string, message: string }
+      "410":
+        description: Short URL has expired
+        body: { timestamp: string, status: 410, error: string, message: string }
+
+  - method: GET
+    path: /api/v1/urls/{shortCode}/analytics
+    request:
+      path_params: { shortCode: string }
+    responses:
+      "200":
+        description: Analytics for the short code
+        body: { short_code: string, original_url: string, click_count: integer, last_accessed_at: string|null, referrers: array, created_at: string, expires_at: string|null }
+      "404":
+        description: Short code not found
+        body: { timestamp: string, status: 404, error: string, message: string }
+
+non_functional_requirements:
+  performance:
+    - The redirect endpoint SHALL respond in under 50 ms at the 95th percentile under
+      nominal load.
+    - The shorten endpoint SHALL respond in under 200 ms at the 95th percentile.
+    - The service SHALL sustain at least 500 requests per second on the redirect path.
+    - Short code lookups MUST be O(1) via an indexed unique column on short_code.
+  security:
+    - All input URLs MUST be validated and sanitized before persistence (REQ-SHORT-008).
+    - The service MUST block SSRF by rejecting private, loopback, link-local, and
+      internal-range hosts (REQ-SHORT-010).
+    - The service MUST NOT act as an open redirector; only stored, validated URLs are
+      eligible redirect targets (REQ-SHORT-012).
+    - All traffic SHALL be served over HTTPS in production.
+    - Error responses MUST NOT leak stack traces or internal implementation details
+      (REQ-SHORT-011).
+  rate_limiting:
+    - The POST /api/v1/urls endpoint SHALL be rate limited to 60 requests per minute
+      per client IP address.
+    - The redirect endpoint SHALL be rate limited to 600 requests per minute per client IP.
+    - Exceeding a limit MUST return HTTP 429 (Too Many Requests) with a Retry-After header.
+
+# ## Diagrams
+#
+# - [Sequence diagram — shorten then redirect](diagrams/sequence.md)
+# - [ER diagram — data model](diagrams/er.md)
+# - [State diagram — URL lifecycle](diagrams/state.md)
